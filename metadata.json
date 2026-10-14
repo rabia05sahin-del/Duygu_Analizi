@@ -1,0 +1,6 @@
+{
+  "name": "Türkçe Duygu Analizi (BERT)",
+  "description": "Hugging Face savasy/bert-base-turkish-sentiment-cased modeli ile Türkçe metin ve yorumlar için duygu analizi uygulaması.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
