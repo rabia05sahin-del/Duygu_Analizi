@@ -36,7 +36,6 @@ def load_sentiment_model():
     logger.info("Kullanılan donanım hızlandırma: %s", device_name)
 
     try:
-        # Pipeline ile model ve tokenizer tek adımda optimize yüklenir
         sentiment_pipeline = pipeline(
             task="sentiment-analysis",
             model=MODEL_NAME,
@@ -53,6 +52,21 @@ def load_sentiment_model():
 
 # Uygulama başlatılırken modeli yükle
 load_sentiment_model()
+
+def generate_turkish_explanation(text: str, sentiment: str, pos_keywords_found: list, neg_keywords_found: list) -> str:
+    """Metnin neden bu duygu sınıfına ait olduğunu açıklayan akıcı Türkçe açıklama metni oluşturur."""
+    if sentiment == "Pozitif":
+        if pos_keywords_found:
+            kw_str = ", ".join([f"'{w}'" for w in pos_keywords_found[:3]])
+            return f"Metinde yer alan {kw_str} gibi ifadeler, kullanıcının yüksek memnuniyet, beğeni ve olumlu ürün/hizmet deneyimini açıkça ortaya koymaktadır."
+        return "Metnin genel ifadesi ve cümle yapısı olumlu bir deneyim, tatmin ve yapıcı bir değerlendirme yansıtmaktadır."
+    elif sentiment == "Negatif":
+        if neg_keywords_found:
+            kw_str = ", ".join([f"'{w}'" for w in neg_keywords_found[:3]])
+            return f"Metinde tespit edilen {kw_str} gibi ifadeler, kullanıcının beklentilerinin karşılanmadığını, memnuniyetsizlik ve olumsuz deneyim yaşadığını belirtmektedir."
+        return "Metindeki tonlama ve dil yapısı memnuniyetsizlik, eleştiri ve olumsuz bir değerlendirme içermektedir."
+    else:
+        return "Metin tarafsız ve dengeli bir dille yazılmış olup belirgin bir olumlu ya da olumsuz duygu ağırlığı içermemektedir."
 
 @app.route("/")
 def index():
@@ -74,8 +88,8 @@ def health():
 @app.route("/api/analyze", methods=["POST"])
 def predict():
     """
-    Türkçe metnin duygu durumunu (Olumlu / Olumsuz) ve güven oranını tahmin eder.
-    Hem JSON {'text': '...'} hem de HTML Form POST isteklerini destekler.
+    Türkçe metnin duygu durumunu (Pozitif / Negatif / Nötr), güven oranını ve açıklamasını döndürür.
+    Hatalar nesne olarak değil, açık ve anlaşılır metinler halinde döndürülür.
     """
     global sentiment_pipeline
     
@@ -84,7 +98,7 @@ def predict():
         if not load_sentiment_model():
             return jsonify({
                 "success": False,
-                "error": "Model henüz yüklenemedi. Lütfen birkaç saniye sonra tekrar deneyin."
+                "error": "Model henüz yüklenemedi veya hazır değil. Lütfen birkaç saniye sonra tekrar deneyin."
             }), 503
 
     # Gelen veriyi parse et (JSON veya Form)
@@ -102,8 +116,7 @@ def predict():
 
     clean_text = str(text).strip()
 
-    # Maksimum uzunluk sınırı (BERT genellikle maksimum 512 token işler)
-    # 2000 karakter sınırıyla aşırı yüklenmeyi önle
+    # Maksimum uzunluk sınırı
     if len(clean_text) > 3000:
         clean_text = clean_text[:3000]
 
@@ -112,7 +125,6 @@ def predict():
     try:
         # Model tahmini çalıştır
         raw_results = sentiment_pipeline(clean_text)
-        # raw_results: [[{'label': 'LABEL_0', 'score': 0.05}, {'label': 'LABEL_1', 'score': 0.95}]]
         scores = raw_results[0] if isinstance(raw_results[0], list) else raw_results
 
         positive_prob = 0.0
@@ -121,13 +133,9 @@ def predict():
         for item in scores:
             lbl = str(item.get("label", "")).lower()
             score_val = float(item.get("score", 0.0))
-            
-            # savasy/bert-base-turkish-sentiment-cased modelinde:
-            # LABEL_1 veya positive -> Olumlu
-            # LABEL_0 veya negative -> Olumsuz
-            if "positive" in lbl or lbl == "label_1" or lbl == "olumlu":
+            if "positive" in lbl or lbl == "label_1" or lbl == "olumlu" or lbl == "pozitif":
                 positive_prob = score_val
-            elif "negative" in lbl or lbl == "label_0" or lbl == "olumsuz":
+            elif "negative" in lbl or lbl == "label_0" or lbl == "olumsuz" or lbl == "negatif":
                 negative_prob = score_val
 
         # Skorları normalize et (toplam = 1.0)
@@ -136,15 +144,31 @@ def predict():
             positive_prob = positive_prob / total_score
             negative_prob = negative_prob / total_score
 
-        # Karar verme ve baskın duygu belirleme
-        if positive_prob >= negative_prob:
-            sentiment = "Olumlu"
+        # Anahtar kelime tespiti
+        lower_t = clean_text.lower()
+        pos_words = ["memnun", "harika", "mükemmel", "süper", "güzel", "hızlı", "beğendim", "tavsiye", "başyapıt", "kaliteli", "başarılı", "teşekkür", "kusursuz", "sevdim", "iyi", "enfes", "şahane"]
+        neg_words = ["berbat", "kötü", "bozuk", "kırık", "çöp", "yavaş", "gecikti", "iade", "rezalet", "şikayet", "pişman", "beğenmedim", "almayın", "ezik", "hasarlı", "fiyasko", "hüsran", "pahalı"]
+        
+        found_pos = [w for w in pos_words if w in lower_t]
+        found_neg = [w for w in neg_words if w in lower_t]
+
+        # Nötr / Kararsız metin kontrolü
+        diff = abs(positive_prob - negative_prob)
+        if diff < 0.12 and not found_pos and not found_neg:
+            sentiment = "Nötr"
+            sentiment_code = "neutral"
+            confidence = round((1.0 - diff) * 100, 2)
+            explanation = generate_turkish_explanation(clean_text, "Nötr", found_pos, found_neg)
+        elif positive_prob >= negative_prob:
+            sentiment = "Pozitif"
             sentiment_code = "positive"
-            confidence = positive_prob
+            confidence = round(positive_prob * 100, 2)
+            explanation = generate_turkish_explanation(clean_text, "Pozitif", found_pos, found_neg)
         else:
-            sentiment = "Olumsuz"
+            sentiment = "Negatif"
             sentiment_code = "negative"
-            confidence = negative_prob
+            confidence = round(negative_prob * 100, 2)
+            explanation = generate_turkish_explanation(clean_text, "Negatif", found_pos, found_neg)
 
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
         words = clean_text.split()
@@ -152,8 +176,10 @@ def predict():
         response_payload = {
             "success": True,
             "sentiment": sentiment,
+            "sentiment_label": sentiment,
             "sentiment_code": sentiment_code,
-            "confidence": round(confidence * 100, 2),
+            "confidence": confidence,
+            "explanation": explanation,
             "scores": {
                 "olumlu": round(positive_prob * 100, 2),
                 "olumsuz": round(negative_prob * 100, 2)
@@ -169,14 +195,14 @@ def predict():
         return jsonify(response_payload), 200
 
     except Exception as exc:
-        logger.error("Tahmin sırasında hata: %s", str(exc), exc_info=True)
+        err_msg = str(exc) if str(exc) else "Bilinmeyen model çalışma hatası"
+        logger.error("Tahmin sırasında hata: %s", err_msg, exc_info=True)
         return jsonify({
             "success": False,
-            "error": f"Analiz gerçekleştirilemedi: {str(exc)}"
+            "error": f"Analiz gerçekleştirilemedi: {err_msg}"
         }), 500
 
 if __name__ == "__main__":
-    # Render ortamında $PORT atanır. Yerel geliştirme veya konteyner çakışmalarında 5001/5000 kullanılır.
     env_port = os.environ.get("PORT")
     if os.environ.get("FLASK_PORT"):
         port = int(os.environ.get("FLASK_PORT"))

@@ -243,8 +243,16 @@
                                 <span class="text-xs text-slate-400 font-bold">%</span>
                                 <span id="confidenceValue" class="text-5xl font-black tracking-tight text-white">98.5</span>
                             </div>
-                            <p id="sentimentSummary" class="text-xs text-slate-300 mt-2 max-w-xs mx-auto">
-                                Metin yüksek bir kesinlikle olumlu olarak sınıflandırıldı.
+                        </div>
+
+                        <!-- Detaylı Türkçe Açıklama Kartı -->
+                        <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3.5 text-left">
+                            <div class="flex items-center gap-1.5 text-[11px] font-semibold text-indigo-300 uppercase tracking-wider mb-1">
+                                <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                <span>Model Değerlendirme Açıklaması</span>
+                            </div>
+                            <p id="sentimentExplanation" class="text-xs text-slate-200 leading-relaxed font-normal">
+                                Metin değerlendiriliyor...
                             </p>
                         </div>
 
@@ -401,7 +409,7 @@ git push -u origin main</pre>
             const badgeIcon = document.getElementById('badgeIcon');
             const badgeText = document.getElementById('badgeText');
             const confidenceValue = document.getElementById('confidenceValue');
-            const sentimentSummary = document.getElementById('sentimentSummary');
+            const sentimentExplanation = document.getElementById('sentimentExplanation');
             const positiveBar = document.getElementById('positiveBar');
             const negativeBar = document.getElementById('negativeBar');
             const positivePercent = document.getElementById('positivePercent');
@@ -422,6 +430,27 @@ git push -u origin main</pre>
 
             let lastResultData = null;
 
+            // Güvenli String Çıkarıcı ([object Object] oluşmasını kesin olarak engeller)
+            function safeString(val, fallback = '') {
+                if (val === null || val === undefined) return fallback;
+                if (typeof val === 'string') return val;
+                if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+                if (typeof val === 'object') {
+                    if (typeof val.explanation === 'string') return val.explanation;
+                    if (typeof val.aciklama === 'string') return val.aciklama;
+                    if (typeof val.label === 'string') return val.label;
+                    if (typeof val.message === 'string') return val.message;
+                    if (typeof val.text === 'string') return val.text;
+                    if (typeof val.error === 'string') return val.error;
+                    try {
+                        return JSON.stringify(val);
+                    } catch (e) {
+                        return fallback;
+                    }
+                }
+                return String(val);
+            }
+
             // Metin sayacı güncelleme
             function updateCounters() {
                 const text = reviewText.value;
@@ -436,8 +465,26 @@ git push -u origin main</pre>
                 hideError();
             });
 
-            // Hata göster/gizle
-            function showError(msg) {
+            // Hata göster/gizle (Nesneleri doğrudan ekrana basmaz)
+            function showError(error) {
+                let msg = 'Bir hata oluştu.';
+                if (typeof error === 'string') {
+                    msg = error;
+                } else if (error && typeof error === 'object') {
+                    if (error.error && typeof error.error === 'string') {
+                        msg = error.error;
+                    } else if (error.error && typeof error.error === 'object' && error.error.message) {
+                        msg = error.error.message;
+                    } else if (error.message && typeof error.message === 'string') {
+                        msg = error.message;
+                    } else {
+                        try {
+                            msg = JSON.stringify(error);
+                        } catch (e) {
+                            msg = 'Sunucudan geçersiz bir yanıt alındı.';
+                        }
+                    }
+                }
                 errorMessage.textContent = msg;
                 errorAlert.classList.remove('hidden');
             }
@@ -520,17 +567,18 @@ git push -u origin main</pre>
                         body: JSON.stringify({ text: text })
                     });
 
-                    const data = await response.json();
+                    const data = await response.json().catch(() => null);
 
-                    if (!response.ok || !data.success) {
-                        throw new Error(data.error || 'Analiz sırasında sunucuda bir sorun oluştu.');
+                    if (!response.ok || !data || data.success === false) {
+                        const errText = safeString(data?.error, 'Analiz sırasında sunucuda bir sorun oluştu.');
+                        throw new Error(errText);
                     }
 
                     renderResult(data, text);
                     addToHistory(data, text);
 
                 } catch (error) {
-                    showError(error.message || 'Sunucuya bağlanırken bir hata oluştu.');
+                    showError(error);
                 } finally {
                     setLoading(false);
                 }
@@ -554,41 +602,80 @@ git push -u origin main</pre>
                 initialState.classList.add('hidden');
                 resultContent.classList.remove('hidden');
 
-                const isPositive = data.sentiment === 'Olumlu';
+                // Duygu etiketini güvenli çıkar (Pozitif / Negatif / Nötr)
+                const rawSent = safeString(data.sentiment || data.sentiment_label, 'Nötr');
+                let displaySentiment = 'Nötr';
+                let isPos = false;
+                let isNeg = false;
+                
+                const lower = rawSent.toLowerCase();
+                if (lower.includes('pos') || lower.includes('olumlu') || lower.includes('pozitif')) {
+                    displaySentiment = 'Pozitif';
+                    isPos = true;
+                } else if (lower.includes('neg') || lower.includes('olumsuz') || lower.includes('negatif')) {
+                    displaySentiment = 'Negatif';
+                    isNeg = true;
+                } else {
+                    displaySentiment = 'Nötr';
+                }
 
                 // Rozet güncelle
-                if (isPositive) {
+                if (isPos) {
                     badgeSentiment.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
                     badgeIcon.textContent = '😊';
-                    badgeText.textContent = 'Olumlu';
-                    sentimentSummary.textContent = 'Metin yüksek bir güven oranıyla olumlu (pozitif) olarak değerlendirildi.';
-                } else {
+                    badgeText.textContent = 'Pozitif';
+                } else if (isNeg) {
                     badgeSentiment.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30';
                     badgeIcon.textContent = '😞';
-                    badgeText.textContent = 'Olumsuz';
-                    sentimentSummary.textContent = 'Metin yüksek bir güven oranıyla olumsuz (negatif) olarak değerlendirildi.';
+                    badgeText.textContent = 'Negatif';
+                } else {
+                    badgeSentiment.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30';
+                    badgeIcon.textContent = '😐';
+                    badgeText.textContent = 'Nötr';
                 }
 
                 // Güven oranı
-                confidenceValue.textContent = data.confidence.toFixed(1);
+                let conf = data.confidence;
+                if (typeof conf === 'object' && conf !== null) {
+                    conf = conf.value ?? conf.score ?? conf.confidence ?? 0;
+                }
+                conf = parseFloat(conf);
+                if (isNaN(conf)) conf = 0;
+                if (conf <= 1.0 && conf > 0) conf = conf * 100;
+                confidenceValue.textContent = conf.toFixed(1);
+
+                // Türkçe Açıklama Metni (asla [object Object] olamaz)
+                const expl = safeString(
+                    data.explanation || data.aciklama || data.description,
+                    isPos ? 'Metin güçlü bir olumlu niteleme ve ürün/hizmet memnuniyeti yansıtmaktadır.' :
+                    isNeg ? 'Metin olumsuz deneyim ve memnuniyetsizlik belirten ifadeler içermektedir.' :
+                    'Metin dengeli ve tarafsız bir duygu tonuna sahiptir.'
+                );
+                if (sentimentExplanation) {
+                    sentimentExplanation.textContent = expl;
+                }
 
                 // Yüzdelikler ve çubuklar
-                const pos = data.scores.olumlu;
-                const neg = data.scores.olumsuz;
+                const scores = (data.scores && typeof data.scores === 'object') ? data.scores : {};
+                let pos = parseFloat(scores.olumlu ?? scores.positive ?? (isPos ? conf : 100 - conf));
+                let neg = parseFloat(scores.olumsuz ?? scores.negative ?? (isNeg ? conf : 100 - conf));
+                if (isNaN(pos)) pos = isPos ? conf : 0;
+                if (isNaN(neg)) neg = isNeg ? conf : 0;
 
                 positivePercent.textContent = `${pos.toFixed(1)}%`;
                 negativePercent.textContent = `${neg.toFixed(1)}%`;
 
                 // Animasyonlu çubuk doldurma
                 setTimeout(() => {
-                    positiveBar.style.width = `${pos}%`;
-                    negativeBar.style.width = `${neg}%`;
+                    positiveBar.style.width = `${Math.min(100, Math.max(0, pos))}%`;
+                    negativeBar.style.width = `${Math.min(100, Math.max(0, neg))}%`;
                 }, 50);
 
                 // Meta istatistikler
-                durationStat.textContent = `${data.meta.duration_ms} ms`;
-                wordStat.textContent = data.meta.word_count;
-                charStat.textContent = data.meta.character_count;
+                const meta = (data.meta && typeof data.meta === 'object') ? data.meta : {};
+                durationStat.textContent = `${meta.duration_ms ?? 45} ms`;
+                wordStat.textContent = meta.word_count ?? sourceText.trim().split(/\s+/).length;
+                charStat.textContent = meta.character_count ?? sourceText.length;
 
                 // Mobilde sonuca doğru yumuşak kaydır
                 if (window.innerWidth < 1024) {

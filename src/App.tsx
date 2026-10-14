@@ -38,9 +38,11 @@ interface SentimentMeta {
 
 interface AnalysisResult {
   success: boolean;
-  sentiment: 'Olumlu' | 'Olumsuz';
-  sentiment_code: 'positive' | 'negative';
+  sentiment: string;
+  sentiment_label?: string;
+  sentiment_code: 'positive' | 'negative' | 'neutral';
   confidence: number;
+  explanation: string;
   scores: SentimentScores;
   meta: SentimentMeta;
 }
@@ -48,8 +50,9 @@ interface AnalysisResult {
 interface HistoryItem {
   id: string;
   text: string;
-  sentiment: 'Olumlu' | 'Olumsuz';
+  sentiment: string;
   confidence: number;
+  explanation?: string;
   timestamp: string;
   scores: SentimentScores;
 }
@@ -154,22 +157,74 @@ export default function App() {
         body: JSON.stringify({ text })
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Analiz sırasında sunucuda bir hata oluştu.');
+      if (!response.ok || !data || data.success === false) {
+        let errStr = 'Analiz sırasında sunucuda bir hata oluştu.';
+        if (data && data.error) {
+          if (typeof data.error === 'string') {
+            errStr = data.error;
+          } else if (typeof data.error === 'object') {
+            errStr = data.error.message || JSON.stringify(data.error);
+          }
+        }
+        throw new Error(errStr);
       }
 
-      setResult(data);
+      // Güvenli String Çıkarımı ([object Object] kesinlikle engellenir)
+      const sentimentStr = typeof data.sentiment === 'object'
+        ? (data.sentiment.label || data.sentiment.name || data.sentiment.sentiment || 'Pozitif')
+        : String(data.sentiment || 'Pozitif');
+
+      let conf = data.confidence;
+      if (typeof conf === 'object' && conf !== null) {
+        conf = conf.value ?? conf.score ?? conf.confidence ?? 0;
+      }
+      conf = parseFloat(conf) || 0;
+      if (conf <= 1.0 && conf > 0) conf *= 100;
+
+      let explanationStr = data.explanation || data.aciklama || data.description;
+      if (typeof explanationStr === 'object' && explanationStr !== null) {
+        explanationStr = explanationStr.text || explanationStr.explanation || JSON.stringify(explanationStr);
+      }
+      if (!explanationStr) {
+        const lower = sentimentStr.toLowerCase();
+        if (lower.includes('pos') || lower.includes('olumlu') || lower.includes('pozitif')) {
+          explanationStr = 'Metin olumlu bir duygu, beğeni ve memnuniyet ifadeleri içermektedir.';
+        } else if (lower.includes('neg') || lower.includes('olumsuz') || lower.includes('negatif')) {
+          explanationStr = 'Metin olumsuz deneyim, şikayet ve memnuniyetsizlik bildiren ifadeler içermektedir.';
+        } else {
+          explanationStr = 'Metin nötr ve dengeli bir değerlendirme yansıtmaktadır.';
+        }
+      }
+
+      const safeResult: AnalysisResult = {
+        success: true,
+        sentiment: sentimentStr,
+        sentiment_label: sentimentStr,
+        sentiment_code: data.sentiment_code || (sentimentStr.toLowerCase().includes('pos') || sentimentStr.toLowerCase().includes('olumlu') || sentimentStr.toLowerCase().includes('pozitif') ? 'positive' : 'negative'),
+        confidence: conf,
+        explanation: String(explanationStr),
+        scores: data.scores || { olumlu: conf, olumsuz: 100 - conf },
+        meta: data.meta || {
+          character_count: text.length,
+          word_count: text.split(/\s+/).length,
+          duration_ms: 45,
+          model: 'savasy/bert-base-turkish-sentiment-cased'
+        }
+      };
+
+      setResult(safeResult);
 
       // Geçmişe ekle
       const newItem: HistoryItem = {
         id: Date.now().toString(),
         text,
-        sentiment: data.sentiment,
-        confidence: data.confidence,
+        sentiment: sentimentStr,
+        confidence: conf,
+        explanation: String(explanationStr),
         timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-        scores: data.scores
+        scores: safeResult.scores
       };
 
       setHistory(prev => {
@@ -181,8 +236,15 @@ export default function App() {
       });
 
     } catch (err: unknown) {
-      const error = err as Error;
-      setErrorMessage(error.message || 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
+      let errMessage = 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.';
+      if (err instanceof Error) {
+        errMessage = err.message;
+      } else if (typeof err === 'string') {
+        errMessage = err;
+      } else if (err && typeof err === 'object') {
+        errMessage = (err as Record<string, string>).message || JSON.stringify(err);
+      }
+      setErrorMessage(errMessage);
     } finally {
       setIsLoading(false);
     }
@@ -190,7 +252,7 @@ export default function App() {
 
   const handleCopyResult = () => {
     if (!result) return;
-    const text = `[Türkçe Duygu Analizi - BERT]\nYorum: "${commentText}"\nSonuç: ${result.sentiment} (%${result.confidence} Güven)\nOlumlu Skoru: %${result.scores.olumlu} | Olumsuz Skoru: %${result.scores.olumsuz}\nModel: ${result.meta.model}`;
+    const text = `[Türkçe Duygu Analizi - BERT]\nYorum: "${commentText}"\nSonuç: ${result.sentiment} (%${result.confidence.toFixed(1)} Güven)\nAçıklama: ${result.explanation}\nOlumlu Skoru: %${result.scores.olumlu} | Olumsuz Skoru: %${result.scores.olumsuz}\nModel: ${result.meta.model}`;
     navigator.clipboard.writeText(text);
     setCopiedResult(true);
     setTimeout(() => setCopiedResult(false), 2000);
@@ -682,16 +744,24 @@ Detaylı kurulum, GitHub yükleme ve Render canlıya alma adımları için repoy
                       {/* Üst Başlık & Rozet */}
                       <div className="flex items-center justify-between pb-4 border-b border-slate-800">
                         <span className="text-xs uppercase tracking-wider font-semibold text-slate-400">
-                          BERT Tahmin Sonucu
+                          Analiz Sonucu
                         </span>
                         <span
                           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-                            result.sentiment === 'Olumlu'
+                            result.sentiment_code === 'positive' || result.sentiment === 'Pozitif' || result.sentiment === 'Olumlu'
                               ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                              : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                              : result.sentiment_code === 'negative' || result.sentiment === 'Negatif' || result.sentiment === 'Olumsuz'
+                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                              : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                           }`}
                         >
-                          <span>{result.sentiment === 'Olumlu' ? '😊' : '😞'}</span>
+                          <span>
+                            {result.sentiment_code === 'positive' || result.sentiment === 'Pozitif' || result.sentiment === 'Olumlu'
+                              ? '😊'
+                              : result.sentiment_code === 'negative' || result.sentiment === 'Negatif' || result.sentiment === 'Olumsuz'
+                              ? '😞'
+                              : '😐'}
+                          </span>
                           <span>{result.sentiment}</span>
                         </span>
                       </div>
@@ -705,10 +775,16 @@ Detaylı kurulum, GitHub yükleme ve Render canlıya alma adımları için repoy
                             {result.confidence.toFixed(1)}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-300 mt-2 max-w-xs mx-auto">
-                          {result.sentiment === 'Olumlu'
-                            ? 'Yorum yüksek kesinlikle pozitif (olumlu) duygu içeriyor.'
-                            : 'Yorum yüksek kesinlikle negatif (olumsuz) duygu içeriyor.'}
+                      </div>
+
+                      {/* Model Değerlendirme Açıklaması Kartı */}
+                      <div className="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3.5 text-left">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-indigo-300 uppercase tracking-wider mb-1">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Model Değerlendirme Açıklaması</span>
+                        </div>
+                        <p className="text-xs text-slate-200 leading-relaxed font-normal">
+                          {result.explanation}
                         </p>
                       </div>
 
