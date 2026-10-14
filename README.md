@@ -31,9 +31,11 @@ turkce-duygu-analizi/
 ├── app.py                # Flask backend sunucusu ve Transformers model entegrasyonu
 ├── templates/
 │   └── index.html        # Modern Türkçe frontend arayüzü (HTML5, Tailwind CSS, JS)
-├── requirements.txt      # Gerekli Python bağımlılıkları (flask, transformers, torch, gunicorn)
+├── requirements.txt      # Gerekli Python bağımlılıkları (CPU optimize torch, transformers, flask)
 ├── Procfile              # Render / Heroku için Gunicorn üretim sunucusu komutu
 ├── render.yaml           # Render Blueprint (Infrastructure-as-code) yapılandırması
+├── vercel.json           # Vercel dağıtım yapılandırması
+├── .npmrc                # legacy-peer-deps yapılandırması (Vercel npm hatalarını önler)
 ├── runtime.txt           # Python çalışma zamanı sürümü (python-3.10.12)
 ├── .gitignore            # Git dışı bırakılacak dosyalar (venv, __pycache__, cache vb.)
 └── README.md             # Proje dokümantasyonu ve kurulum rehberi
