@@ -1,5 +1,9 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/predict", "destination": "/api/predict" },
+    { "source": "/api/analyze", "destination": "/api/predict" }
+  ]
 }
